@@ -1,0 +1,20 @@
+{
+  "capabilities": [
+    {
+      "id": "browser",
+      "implementation": "Playwright CLI driving the installed Edge",
+      "command": "playwright-cli",
+      "versionArgs": ["--version"],
+      "npmPackage": "@playwright/cli",
+      "notes": "No browser download: uses the msedge channel. Chosen over Playwright MCP (always-on tool schemas), Chrome DevTools MCP (Edge not officially supported, usage statistics on by default) and Claude in Chrome (unavailable on Bedrock/gateway). Fallback if the CLI session daemon is unstable on Windows: Playwright MCP with --browser msedge --headless."
+    },
+    {
+      "id": "docs",
+      "implementation": "Local sources, type definitions and docs of the installed versions, read with the agent's file tools",
+      "command": "",
+      "versionArgs": [],
+      "npmPackage": "",
+      "notes": "No extra product and no outbound traffic. Chosen over hosted Context7 (queries leave the network, community-curated content, extra SaaS domain to approve). Move to WebFetch with an allowlist of official documentation domains when narrative docs are needed and the network team approves; Context7 on-premise is the option for searching private internal library docs."
+    }
+  ]
+}

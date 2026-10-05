@@ -1,0 +1,19 @@
+{
+  "name": "bedrock",
+  "description": "Amazon Bedrock, Seoul region, model IDs pinned (no cross-region inference profile). NOT verified by a live call: confirm the model IDs are invocable in-region with the target AWS account before rollout.",
+  "env": {
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "AWS_REGION": "ap-northeast-2",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic.claude-opus-5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic.claude-sonnet-5",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic.claude-haiku-4-5-20251001-v1:0",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_TELEMETRY": "1"
+  },
+  "settings": {
+    "skipWebFetchPreflight": true
+  },
+  "params": {
+    "AwsProfile": "AWS_PROFILE"
+  }
+}

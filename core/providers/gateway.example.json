@@ -1,0 +1,15 @@
+{
+  "name": "gateway",
+  "description": "Customer-controlled LLM gateway exposing an Anthropic-format endpoint. The gateway credential is never stored here: supply it through apiKeyHelper or the ANTHROPIC_AUTH_TOKEN environment variable on the PC.",
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://llm-gateway.example.com",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_TELEMETRY": "1"
+  },
+  "settings": {
+    "skipWebFetchPreflight": true
+  },
+  "params": {
+    "GatewayUrl": "ANTHROPIC_BASE_URL"
+  }
+}

@@ -1,0 +1,325 @@
+diff --git a/src/main/java/org/springframework/samples/petclinic/mapper/PetMapper.java b/src/main/java/org/springframework/samples/petclinic/mapper/PetMapper.java
+index 1a20bf4..26c2b03 100644
+--- a/src/main/java/org/springframework/samples/petclinic/mapper/PetMapper.java
++++ b/src/main/java/org/springframework/samples/petclinic/mapper/PetMapper.java
+@@ -1,24 +1,41 @@
+ package org.springframework.samples.petclinic.mapper;
+ 
++import org.mapstruct.IterableMapping;
+ import org.mapstruct.Mapper;
+ import org.mapstruct.Mapping;
++import org.mapstruct.Named;
+ import org.springframework.samples.petclinic.rest.dto.PetDto;
+ import org.springframework.samples.petclinic.rest.dto.PetFieldsDto;
+ import org.springframework.samples.petclinic.rest.dto.PetTypeDto;
++import org.springframework.samples.petclinic.rest.dto.VisitDto;
+ import org.springframework.samples.petclinic.model.Pet;
+ import org.springframework.samples.petclinic.model.PetType;
++import org.springframework.samples.petclinic.model.Visit;
++import org.springframework.samples.petclinic.service.VisitRecencyPolicy;
+ 
+ import java.util.Collection;
++import java.util.List;
+ 
+ /**
+  * Map Pet & PetDto using mapstruct
+  */
+-@Mapper
++@Mapper(uses = VisitRecencyPolicy.class)
+ public interface PetMapper {
+ 
+     @Mapping(source = "owner.id", target = "ownerId")
++    @Mapping(target = "visits", qualifiedByName = "toNestedVisitDtos")
+     PetDto toPetDto(Pet pet);
+ 
++    @Named("toNestedVisitDtos")
++    @IterableMapping(qualifiedByName = "toNestedVisitDto")
++    List<VisitDto> toNestedVisitDtos(List<Visit> visits);
++
++    // Nested visits keep petId unset (existing response), only recentVisit is added (CR-001)
++    @Named("toNestedVisitDto")
++    @Mapping(target = "petId", ignore = true)
++    @Mapping(source = "date", target = "recentVisit", qualifiedByName = "isRecentVisit")
++    VisitDto toVisitDto(Visit visit);
++
+     Collection<PetDto> toPetsDto(Collection<Pet> pets);
+ 
+     Collection<Pet> toPets(Collection<PetDto> pets);
+diff --git a/src/main/java/org/springframework/samples/petclinic/mapper/VisitMapper.java b/src/main/java/org/springframework/samples/petclinic/mapper/VisitMapper.java
+index 62767fc..6d14f5c 100644
+--- a/src/main/java/org/springframework/samples/petclinic/mapper/VisitMapper.java
++++ b/src/main/java/org/springframework/samples/petclinic/mapper/VisitMapper.java
+@@ -5,19 +5,21 @@ import org.mapstruct.Mapping;
+ import org.springframework.samples.petclinic.rest.dto.VisitDto;
+ import org.springframework.samples.petclinic.model.Visit;
+ import org.springframework.samples.petclinic.rest.dto.VisitFieldsDto;
++import org.springframework.samples.petclinic.service.VisitRecencyPolicy;
+ 
+ import java.util.Collection;
+ 
+ /**
+  * Map Visit & VisitDto using mapstruct
+  */
+-@Mapper(uses = PetMapper.class)
++@Mapper(uses = {PetMapper.class, VisitRecencyPolicy.class})
+ public interface VisitMapper {
+     Visit toVisit(VisitDto visitDto);
+ 
+     Visit toVisit(VisitFieldsDto visitFieldsDto);
+ 
+     @Mapping(source = "pet.id", target = "petId")
++    @Mapping(source = "date", target = "recentVisit", qualifiedByName = "isRecentVisit")
+     VisitDto toVisitDto(Visit visit);
+ 
+     Collection<VisitDto> toVisitsDto(Collection<Visit> visits);
+diff --git a/src/main/resources/openapi.yml b/src/main/resources/openapi.yml
+index c49fe49..ace0786 100644
+--- a/src/main/resources/openapi.yml
++++ b/src/main/resources/openapi.yml
+@@ -2140,6 +2140,12 @@ components:
+               minimum: 0
+               example: 1
+               readOnly: true
++            recentVisit:
++              title: Recent visit
++              description: True if the visit date is between 30 days ago and today inclusive (Asia/Seoul date, computed by the server). False for future dates and visits without a date.
++              type: boolean
++              example: false
++              readOnly: true
+           required:
+             - id
+     PetTypeFields:
+diff --git a/src/test/java/org/springframework/samples/petclinic/rest/controller/OwnerRestControllerTests.java b/src/test/java/org/springframework/samples/petclinic/rest/controller/OwnerRestControllerTests.java
+index 07bb8cb..a132b18 100644
+--- a/src/test/java/org/springframework/samples/petclinic/rest/controller/OwnerRestControllerTests.java
++++ b/src/test/java/org/springframework/samples/petclinic/rest/controller/OwnerRestControllerTests.java
+@@ -45,10 +45,12 @@ import org.springframework.test.web.servlet.result.MockMvcResultHandlers;
+ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+ 
+ import java.text.SimpleDateFormat;
++import java.time.Clock;
+ import java.time.LocalDate;
+ import java.util.ArrayList;
+ import java.util.List;
+ 
++import static org.hamcrest.Matchers.nullValue;
+ import static org.mockito.BDDMockito.given;
+ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+@@ -79,6 +81,9 @@ class OwnerRestControllerTests {
+     @MockBean
+     private ClinicService clinicService;
+ 
++    @Autowired
++    private Clock clock;
++
+     private MockMvc mockMvc;
+ 
+     private List<OwnerDto> owners;
+@@ -160,6 +165,28 @@ class OwnerRestControllerTests {
+             .andExpect(jsonPath("$.firstName").value("George"));
+     }
+ 
++    @Test
++    @WithMockUser(roles = "OWNER_ADMIN")
++    void testGetOwnerNestedVisitsHaveRecentVisitFlag() throws Exception {
++        LocalDate today = LocalDate.now(clock);
++        OwnerDto ownerDto = owners.get(0);
++        PetDto petDto = ownerDto.getPets().get(0);
++        petDto.getVisits().clear();
++        petDto.addVisitsItem(new VisitDto().id(10).date(today.minusDays(30)).description("recent"));
++        petDto.addVisitsItem(new VisitDto().id(11).date(today.minusDays(31)).description("old"));
++        given(this.clinicService.findOwnerById(1)).willReturn(ownerMapper.toOwner(ownerDto));
++        // Pet#getVisits sorts by date descending
++        this.mockMvc.perform(get("/api/owners/1")
++                .accept(MediaType.APPLICATION_JSON_VALUE))
++            .andExpect(status().isOk())
++            .andExpect(jsonPath("$.pets[0].visits[0].id").value(10))
++            .andExpect(jsonPath("$.pets[0].visits[0].recentVisit").value(true))
++            .andExpect(jsonPath("$.pets[0].visits[1].id").value(11))
++            .andExpect(jsonPath("$.pets[0].visits[1].recentVisit").value(false))
++            // D5/B2: nested visits keep petId unset as before
++            .andExpect(jsonPath("$.pets[0].visits[0].petId").value(nullValue()));
++    }
++
+     @Test
+     @WithMockUser(roles = "OWNER_ADMIN")
+     void testGetOwnerNotFound() throws Exception {
+diff --git a/src/test/java/org/springframework/samples/petclinic/rest/controller/VisitRestControllerTests.java b/src/test/java/org/springframework/samples/petclinic/rest/controller/VisitRestControllerTests.java
+index 74217cc..c2c4b46 100644
+--- a/src/test/java/org/springframework/samples/petclinic/rest/controller/VisitRestControllerTests.java
++++ b/src/test/java/org/springframework/samples/petclinic/rest/controller/VisitRestControllerTests.java
+@@ -39,6 +39,7 @@ import org.springframework.test.context.web.WebAppConfiguration;
+ import org.springframework.test.web.servlet.MockMvc;
+ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+ 
++import java.time.Clock;
+ import java.time.LocalDate;
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -66,6 +67,9 @@ class VisitRestControllerTests {
+     @Autowired
+     private VisitMapper visitMapper;
+ 
++    @Autowired
++    private Clock clock;
++
+     private MockMvc mockMvc;
+ 
+     private List<Visit> visits;
+@@ -127,6 +131,28 @@ class VisitRestControllerTests {
+             .andExpect(jsonPath("$.description").value("rabies shot"));
+     }
+ 
++    @Test
++    @WithMockUser(roles="OWNER_ADMIN")
++    void testGetVisitsRecentVisitFlag() throws Exception {
++        LocalDate today = LocalDate.now(clock);
++        Visit recent = visits.get(0);
++        recent.setDate(today.minusDays(30));
++        Visit old = visits.get(1);
++        old.setDate(today.minusDays(31));
++        given(this.clinicService.findVisitById(2)).willReturn(recent);
++        this.mockMvc.perform(get("/api/visits/2")
++                .accept(MediaType.APPLICATION_JSON_VALUE))
++            .andExpect(status().isOk())
++            .andExpect(jsonPath("$.recentVisit").value(true))
++            .andExpect(jsonPath("$.petId").value(8));
++        given(this.clinicService.findAllVisits()).willReturn(visits);
++        this.mockMvc.perform(get("/api/visits")
++                .accept(MediaType.APPLICATION_JSON_VALUE))
++            .andExpect(status().isOk())
++            .andExpect(jsonPath("$.[0].recentVisit").value(true))
++            .andExpect(jsonPath("$.[1].recentVisit").value(false));
++    }
++
+     @Test
+     @WithMockUser(roles="OWNER_ADMIN")
+     void testGetVisitNotFound() throws Exception {
+=== NEW: src/main/java/org/springframework/samples/petclinic/config/ClockConfig.java
+package org.springframework.samples.petclinic.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.time.Clock;
+import java.time.ZoneId;
+
+/**
+ * Clock used for date-based business rules. Fixed to Asia/Seoul so "today" does not depend on the server time zone.
+ */
+@Configuration
+public class ClockConfig {
+
+    public static final ZoneId CLINIC_ZONE = ZoneId.of("Asia/Seoul");
+
+    @Bean
+    Clock clock() {
+        return Clock.system(CLINIC_ZONE);
+    }
+}
+=== NEW: src/main/java/org/springframework/samples/petclinic/service/VisitRecencyPolicy.java
+package org.springframework.samples.petclinic.service;
+
+import org.mapstruct.Named;
+import org.springframework.stereotype.Component;
+
+import java.time.Clock;
+import java.time.LocalDate;
+
+/**
+ * Single rule for deciding whether a visit is a "recent visit".
+ * A visit is recent if its date is between {@link #RECENT_DAYS} days ago and today, both inclusive.
+ * Future dates and missing dates are not recent.
+ */
+@Component
+public class VisitRecencyPolicy {
+
+    public static final int RECENT_DAYS = 30;
+
+    private final Clock clock;
+
+    public VisitRecencyPolicy(Clock clock) {
+        this.clock = clock;
+    }
+
+    @Named("isRecentVisit")
+    public boolean isRecent(LocalDate visitDate) {
+        if (visitDate == null) {
+            return false;
+        }
+        LocalDate today = LocalDate.now(clock);
+        return !visitDate.isAfter(today) && !visitDate.isBefore(today.minusDays(RECENT_DAYS));
+    }
+}
+=== NEW: src/test/java/org/springframework/samples/petclinic/service/VisitRecencyPolicyTests.java
+package org.springframework.samples.petclinic.service;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.samples.petclinic.config.ClockConfig;
+
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * Boundary tests for {@link VisitRecencyPolicy} (CR-001)
+ */
+class VisitRecencyPolicyTests {
+
+    // 2026-10-04 00:00 in Asia/Seoul
+    private static final Clock FIXED = Clock.fixed(Instant.parse("2026-10-03T15:00:00Z"), ClockConfig.CLINIC_ZONE);
+    private static final LocalDate TODAY = LocalDate.of(2026, 10, 4);
+
+    private final VisitRecencyPolicy policy = new VisitRecencyPolicy(FIXED);
+
+    @Test
+    void todayIsRecent() {
+        assertThat(policy.isRecent(TODAY)).isTrue();
+    }
+
+    @Test
+    void yesterdayIsRecent() {
+        assertThat(policy.isRecent(TODAY.minusDays(1))).isTrue();
+    }
+
+    @Test
+    void exactly30DaysAgoIsRecent() {
+        assertThat(policy.isRecent(TODAY.minusDays(30))).isTrue();
+    }
+
+    @Test
+    void exactly31DaysAgoIsNotRecent() {
+        assertThat(policy.isRecent(TODAY.minusDays(31))).isFalse();
+    }
+
+    @Test
+    void futureDateIsNotRecent() {
+        assertThat(policy.isRecent(TODAY.plusDays(1))).isFalse();
+    }
+
+    @Test
+    void missingDateIsNotRecent() {
+        assertThat(policy.isRecent(null)).isFalse();
+    }
+
+    @Test
+    void todayIsTakenInAsiaSeoulNotUtc() {
+        // UTC is still 2026-10-03 at this instant, Seoul is already 2026-10-04
+        VisitRecencyPolicy utcPolicy = new VisitRecencyPolicy(FIXED.withZone(ZoneId.of("UTC")));
+        assertThat(utcPolicy.isRecent(TODAY)).isFalse();
+        // 2026-09-03 is 31 days before Seoul "today" but only 30 days before UTC "today"
+        assertThat(policy.isRecent(LocalDate.of(2026, 9, 3))).isFalse();
+    }
+
+    @Test
+    void monthEndAndLeapYear() {
+        VisitRecencyPolicy leap = new VisitRecencyPolicy(
+            Clock.fixed(Instant.parse("2028-03-01T03:00:00Z"), ClockConfig.CLINIC_ZONE));
+        assertThat(leap.isRecent(LocalDate.of(2028, 1, 31))).isTrue();
+        assertThat(leap.isRecent(LocalDate.of(2028, 1, 30))).isFalse();
+    }
+}

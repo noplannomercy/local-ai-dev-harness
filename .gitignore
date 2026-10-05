@@ -1,0 +1,5 @@
+# local-only: research brief and review conversation log
+docs/research.md
+
+# tool output
+.playwright-cli/

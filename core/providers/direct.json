@@ -1,0 +1,6 @@
+{
+  "name": "direct",
+  "description": "Anthropic direct (claude.ai login or Console API key). No endpoint override.",
+  "env": {},
+  "settings": {}
+}
